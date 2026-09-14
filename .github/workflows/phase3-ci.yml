@@ -42,7 +42,7 @@ jobs:
           text = text.replace('                path: target,\n', '')
           text = text.replace('        path: target,\n', '')
           text = text.replace('                path: expected,\n', '')
-          text = text.replace('pub fn default_endpoint(kind: TtsProviderKind) -> \'static str {\n    provider(kind).default_endpoint()\n}\n\n', '')
+          text = text.replace("pub fn default_endpoint(kind: TtsProviderKind) -> &'static str {\n    provider(kind).default_endpoint()\n}\n\n", '')
           text = text.replace('        assert!(first.path.is_file());', '        assert!(Path::new(&first.stored_path).ends_with(format!("{}.wav", first.cache_key)));')
           path.write_text(text)
 
