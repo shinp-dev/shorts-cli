@@ -37,7 +37,12 @@ Text and image properties can be changed with `text-set` and `image-set`; their 
 is recorded automatically; use `ved undo demo.json` and `ved redo demo.json` to move
 through up to 100 whole-project snapshots.
 
+AI agents and contributors should read the canonical boundary contract in
+[`docs/agent-contract.md`](docs/agent-contract.md) before changing behavior.
+
 The reviewed Phase 1 contracts and deferred design decisions are in
 [`docs/design-phase-1.md`](docs/design-phase-1.md).
 Phase 2 schema and time-coordinate decisions are in
 [`docs/design-phase-2.md`](docs/design-phase-2.md).
+Phase 3 TTS ownership and cache decisions are in
+[`docs/design-phase-3.md`](docs/design-phase-3.md).
