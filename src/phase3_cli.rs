@@ -291,7 +291,12 @@ fn voice_set(
         .audio_clips
         .iter()
         .position(|item| item.id == original.audio_clip_id)
-        .ok_or_else(|| message(format!("audio clip {} does not exist", original.audio_clip_id)))?;
+        .ok_or_else(|| {
+            message(format!(
+                "audio clip {} does not exist",
+                original.audio_clip_id
+            ))
+        })?;
     if let Some(value) = at {
         project.audio_clips[audio_index].start = value;
     }
@@ -351,9 +356,18 @@ fn voice_remove(project_path: &Path, id: &str) -> Result<()> {
         .position(|item| item.id == voice.audio_clip_id)
         .ok_or_else(|| message(format!("audio clip {} does not exist", voice.audio_clip_id)))?;
     let audio = project.audio_clips.remove(audio_index);
-    let media_still_used = project.audio_clips.iter().any(|item| item.media_id == audio.media_id)
-        || project.timeline.iter().any(|item| item.media_id == audio.media_id)
-        || project.image_overlays.iter().any(|item| item.media_id == audio.media_id);
+    let media_still_used = project
+        .audio_clips
+        .iter()
+        .any(|item| item.media_id == audio.media_id)
+        || project
+            .timeline
+            .iter()
+            .any(|item| item.media_id == audio.media_id)
+        || project
+            .image_overlays
+            .iter()
+            .any(|item| item.media_id == audio.media_id);
     if !media_still_used {
         project.media.retain(|item| item.id != audio.media_id);
     }

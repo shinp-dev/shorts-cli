@@ -232,9 +232,13 @@ pub fn synthesize_cached(
     request: &SynthesisRequest<'_>,
 ) -> Result<SynthesizedAudio> {
     let provider = provider(kind);
-    provider.validate_parameters(request).map_err(VedError::from)?;
+    provider
+        .validate_parameters(request)
+        .map_err(VedError::from)?;
     let endpoint = normalize_endpoint(endpoint.unwrap_or(provider.default_endpoint()))?;
-    let engine_identity = provider.engine_identity(&endpoint).map_err(VedError::from)?;
+    let engine_identity = provider
+        .engine_identity(&endpoint)
+        .map_err(VedError::from)?;
     let cache_key = cache_key(kind, &engine_identity, request)?;
     let cache_root = cache_root(project_path)?;
     let target = cache_root.join(format!("{cache_key}.wav"));
@@ -372,7 +376,12 @@ fn update_materialized_voice(
         .audio_clips
         .iter()
         .find(|item| item.id == original.audio_clip_id)
-        .ok_or_else(|| VedError::Message(format!("audio clip {} does not exist", original.audio_clip_id)))?;
+        .ok_or_else(|| {
+            VedError::Message(format!(
+                "audio clip {} does not exist",
+                original.audio_clip_id
+            ))
+        })?;
     let media_id = audio.media_id.clone();
     let media = project
         .media
@@ -383,7 +392,11 @@ fn update_materialized_voice(
     media.kind = MediaKind::Audio;
     media.probe = synthesized.probe.clone();
 
-    if let Some(voice) = project.voice_clips.iter_mut().find(|item| item.id == original.id) {
+    if let Some(voice) = project
+        .voice_clips
+        .iter_mut()
+        .find(|item| item.id == original.id)
+    {
         voice.engine_identity = synthesized.engine_identity.clone();
         voice.cache_key = synthesized.cache_key.clone();
         voice.endpoint = synthesized.endpoint.clone();
@@ -443,7 +456,10 @@ pub fn validate_wav(path: &Path) -> TtsResult<MediaProbe> {
             path.display()
         )));
     }
-    if !probe.duration.is_some_and(|duration| duration.is_finite() && duration > 0.0) {
+    if !probe
+        .duration
+        .is_some_and(|duration| duration.is_finite() && duration > 0.0)
+    {
         return Err(TtsError::InvalidReturnedAudio(format!(
             "{} has no positive duration",
             path.display()
@@ -481,7 +497,7 @@ fn normalize_endpoint(value: &str) -> Result<String> {
     let url = reqwest::Url::parse(normalized)
         .map_err(|_| TtsError::InvalidParameter(format!("invalid endpoint {value:?}")))?;
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
-        return Err(TtsError::InvalidParameter(format!("invalid endpoint {value:?}" )).into());
+        return Err(TtsError::InvalidParameter(format!("invalid endpoint {value:?}")).into());
     }
     Ok(normalized.to_owned())
 }
@@ -497,7 +513,11 @@ fn client() -> TtsResult<Client> {
         })
 }
 
-fn classify_send_error(provider: &dyn TtsProvider, endpoint: &str, error: reqwest::Error) -> TtsError {
+fn classify_send_error(
+    provider: &dyn TtsProvider,
+    endpoint: &str,
+    error: reqwest::Error,
+) -> TtsError {
     if error.is_connect() {
         let lower = error.to_string().to_ascii_lowercase();
         if lower.contains("refused") {
@@ -547,9 +567,9 @@ fn list_speakers(provider: &dyn TtsProvider, endpoint: &str) -> TtsResult<Vec<Vo
             provider.display_name()
         )));
     }
-    let speakers: Vec<SpeakerResponse> = response
-        .json()
-        .map_err(|error| TtsError::SynthesisFailed(format!("invalid /speakers response: {error}")))?;
+    let speakers: Vec<SpeakerResponse> = response.json().map_err(|error| {
+        TtsError::SynthesisFailed(format!("invalid /speakers response: {error}"))
+    })?;
     let mut voices = Vec::new();
     for speaker in speakers {
         for style in speaker.styles {
@@ -585,9 +605,9 @@ fn version_identity(provider: &dyn TtsProvider, endpoint: &str) -> TtsResult<Str
             endpoint: endpoint.into(),
         });
     }
-    let text = response
-        .text()
-        .map_err(|error| TtsError::SynthesisFailed(format!("invalid /version response: {error}")))?;
+    let text = response.text().map_err(|error| {
+        TtsError::SynthesisFailed(format!("invalid /version response: {error}"))
+    })?;
     let version = serde_json::from_str::<String>(&text).unwrap_or_else(|_| text.trim().to_owned());
     if version.is_empty() {
         return Err(TtsError::SynthesisFailed("empty engine version".into()));
@@ -613,11 +633,17 @@ fn synthesize_voicevox_compatible(
         .map_err(|_| TtsError::InvalidVoice(request.voice.into()))?;
     let response = client()?
         .post(format!("{endpoint}/audio_query"))
-        .query(&[("speaker", speaker.to_string()), ("text", request.text.to_owned())])
+        .query(&[
+            ("speaker", speaker.to_string()),
+            ("text", request.text.to_owned()),
+        ])
         .send()
         .map_err(|error| classify_send_error(provider, endpoint, error))?;
     if !response.status().is_success() {
-        return Err(classify_audio_query_status(response.status(), request.voice));
+        return Err(classify_audio_query_status(
+            response.status(),
+            request.voice,
+        ));
     }
     let mut query: serde_json::Value = response
         .json()
@@ -644,7 +670,10 @@ fn synthesize_voicevox_compatible(
 }
 
 fn classify_audio_query_status(status: StatusCode, voice: &str) -> TtsError {
-    if matches!(status, StatusCode::BAD_REQUEST | StatusCode::NOT_FOUND | StatusCode::UNPROCESSABLE_ENTITY) {
+    if matches!(
+        status,
+        StatusCode::BAD_REQUEST | StatusCode::NOT_FOUND | StatusCode::UNPROCESSABLE_ENTITY
+    ) {
         TtsError::InvalidVoice(voice.into())
     } else {
         TtsError::SynthesisFailed(format!("/audio_query returned HTTP {status}"))
@@ -679,7 +708,11 @@ fn cache_root(project_path: &Path) -> Result<PathBuf> {
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    let components = [parent.join(".ved"), parent.join(".ved/cache"), parent.join(".ved/cache/tts")];
+    let components = [
+        parent.join(".ved"),
+        parent.join(".ved/cache"),
+        parent.join(".ved/cache/tts"),
+    ];
     for component in &components {
         if component.exists() {
             let metadata = fs::symlink_metadata(component).map_err(|error| {
@@ -695,9 +728,8 @@ fn cache_root(project_path: &Path) -> Result<PathBuf> {
         }
     }
     let root = components.last().unwrap().clone();
-    fs::create_dir_all(&root).map_err(|error| {
-        TtsError::CacheWriteFailure(format!("{}: {error}", root.display()))
-    })?;
+    fs::create_dir_all(&root)
+        .map_err(|error| TtsError::CacheWriteFailure(format!("{}: {error}", root.display())))?;
     Ok(root)
 }
 
@@ -715,7 +747,11 @@ fn stored_cache_path(path: &Path, project_path: &Path) -> String {
 fn canonical_float(value: f64) -> String {
     let value = format!("{value:.9}");
     let trimmed = value.trim_end_matches('0').trim_end_matches('.');
-    if trimmed == "-0" { "0".into() } else { trimmed.into() }
+    if trimmed == "-0" {
+        "0".into()
+    } else {
+        trimmed.into()
+    }
 }
 
 #[cfg(test)]
@@ -740,10 +776,22 @@ mod tests {
             cache_key(TtsProviderKind::Voicevox, "voicevox:1", &base).unwrap()
         );
         for changed in [
-            SynthesisRequest { text: "changed", ..base.clone() },
-            SynthesisRequest { voice: "2", ..base.clone() },
-            SynthesisRequest { speed: 1.1, ..base.clone() },
-            SynthesisRequest { pitch: 0.1, ..base.clone() },
+            SynthesisRequest {
+                text: "changed",
+                ..base.clone()
+            },
+            SynthesisRequest {
+                voice: "2",
+                ..base.clone()
+            },
+            SynthesisRequest {
+                speed: 1.1,
+                ..base.clone()
+            },
+            SynthesisRequest {
+                pitch: 0.1,
+                ..base.clone()
+            },
         ] {
             assert_ne!(
                 key,
@@ -779,7 +827,11 @@ mod tests {
 
     #[test]
     fn mock_provider_lists_and_synthesizes_special_text() {
-        if std::process::Command::new("ffprobe").arg("-version").output().is_err() {
+        if std::process::Command::new("ffprobe")
+            .arg("-version")
+            .output()
+            .is_err()
+        {
             return;
         }
         let (endpoint, requests, handle) = spawn_mock_engine();
@@ -802,7 +854,12 @@ mod tests {
         )
         .unwrap();
         assert!(first.path.is_file());
-        let before = requests.lock().unwrap().iter().filter(|p| p.as_str() == "/synthesis").count();
+        let before = requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|p| p.as_str() == "/synthesis")
+            .count();
         let second = synthesize_cached(
             &project,
             TtsProviderKind::Voicevox,
@@ -815,7 +872,12 @@ mod tests {
             },
         )
         .unwrap();
-        let after = requests.lock().unwrap().iter().filter(|p| p.as_str() == "/synthesis").count();
+        let after = requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|p| p.as_str() == "/synthesis")
+            .count();
         assert_eq!(first.cache_key, second.cache_key);
         assert_eq!(before, after, "cache hit must not synthesize again");
         drop(handle);
@@ -823,7 +885,11 @@ mod tests {
 
     #[test]
     fn invalid_cached_audio_is_rejected() {
-        if std::process::Command::new("ffprobe").arg("-version").output().is_err() {
+        if std::process::Command::new("ffprobe")
+            .arg("-version")
+            .output()
+            .is_err()
+        {
             return;
         }
         let directory = tempfile::tempdir().unwrap();
@@ -880,7 +946,8 @@ mod tests {
             "/version" => ("application/json", b"\"1.0.0\"".to_vec()),
             "/speakers" => (
                 "application/json",
-                br#"[{"name":"Mock","speaker_uuid":"uuid","styles":[{"id":1,"name":"Normal"}]}]"#.to_vec(),
+                br#"[{"name":"Mock","speaker_uuid":"uuid","styles":[{"id":1,"name":"Normal"}]}]"#
+                    .to_vec(),
             ),
             "/audio_query" => (
                 "application/json",
@@ -889,7 +956,11 @@ mod tests {
             "/synthesis" => ("audio/wav", tiny_wav()),
             _ => ("text/plain", b"not found".to_vec()),
         };
-        let status = if path_only == "/" { "404 Not Found" } else { "200 OK" };
+        let status = if path_only == "/" {
+            "404 Not Found"
+        } else {
+            "200 OK"
+        };
         let header = format!(
             "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             body.len()

@@ -367,19 +367,34 @@ impl Project {
         let mut linked_audio = std::collections::HashSet::new();
         for voice in &self.voice_clips {
             if voice.voice.is_empty() {
-                return Err(message(format!("voice clip {} has an empty voice id", voice.id)));
+                return Err(message(format!(
+                    "voice clip {} has an empty voice id",
+                    voice.id
+                )));
             }
             if voice.text.is_empty() || voice.text.contains('\0') {
                 return Err(message(format!("voice clip {} has invalid text", voice.id)));
             }
             if !voice.speed.is_finite() || voice.speed <= 0.0 {
-                return Err(message(format!("voice clip {} has invalid speed", voice.id)));
+                return Err(message(format!(
+                    "voice clip {} has invalid speed",
+                    voice.id
+                )));
             }
             if !voice.pitch.is_finite() {
-                return Err(message(format!("voice clip {} has invalid pitch", voice.id)));
+                return Err(message(format!(
+                    "voice clip {} has invalid pitch",
+                    voice.id
+                )));
             }
-            if voice.endpoint.is_empty() || voice.engine_identity.is_empty() || voice.cache_key.is_empty() {
-                return Err(message(format!("voice clip {} has incomplete TTS identity", voice.id)));
+            if voice.endpoint.is_empty()
+                || voice.engine_identity.is_empty()
+                || voice.cache_key.is_empty()
+            {
+                return Err(message(format!(
+                    "voice clip {} has incomplete TTS identity",
+                    voice.id
+                )));
             }
             if !linked_audio.insert(voice.audio_clip_id.as_str()) {
                 return Err(message(format!(

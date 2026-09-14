@@ -289,7 +289,7 @@ fn phase_two_pipeline_uses_one_final_timeline() {
 
     let project: serde_json::Value =
         serde_json::from_slice(&std::fs::read(root.join("demo.json")).unwrap()).unwrap();
-    assert_eq!(project["version"], 2);
+    assert_eq!(project["version"], 3);
     assert_eq!(project["text_overlays"][0]["start"], 0.5);
     assert_eq!(project["image_overlays"][0]["start"], 0.9);
     assert_eq!(project["audio_clips"][0]["start"], 0.0);

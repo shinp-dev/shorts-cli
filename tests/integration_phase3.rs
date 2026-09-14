@@ -87,15 +87,7 @@ fn phase_three_tts_uses_audio_clip_cache_history_and_render_plan() {
     ved(root, &["import", "demo.json", "video.mp4"]);
     ved(
         root,
-        &[
-            "add",
-            "demo.json",
-            "video.mp4",
-            "--in",
-            "0",
-            "--out",
-            "2",
-        ],
+        &["add", "demo.json", "video.mp4", "--in", "0", "--out", "2"],
     );
 
     let special_text = "\" ' & | > < % \\ 日本語\n空白 でもちゃんと先を読む。";
@@ -132,7 +124,13 @@ fn phase_three_tts_uses_audio_clip_cache_history_and_render_plan() {
     assert_eq!(project["voice_clips"][0]["audio_clip_id"], "a1");
     assert_eq!(project["audio_clips"][0]["start"], 0.25);
     assert_eq!(project["audio_clips"][0]["volume"], 0.8);
-    assert!(project["voice_clips"][0]["cache_key"].as_str().unwrap().len() == 64);
+    assert!(
+        project["voice_clips"][0]["cache_key"]
+            .as_str()
+            .unwrap()
+            .len()
+            == 64
+    );
     let media_path = project["media"]
         .as_array()
         .unwrap()
@@ -188,7 +186,11 @@ fn phase_three_tts_uses_audio_clip_cache_history_and_render_plan() {
             &mock.endpoint,
         ],
     );
-    assert_eq!(mock.synthesis_count(), 1, "identical synthesis must hit cache");
+    assert_eq!(
+        mock.synthesis_count(),
+        1,
+        "identical synthesis must hit cache"
+    );
     ved(root, &["voice-remove", "demo.json", "v2"]);
 
     ved(
@@ -271,7 +273,10 @@ fn phase_three_tts_uses_audio_clip_cache_history_and_render_plan() {
         .unwrap()
         .filter_map(|entry| entry.ok())
         .count();
-    assert_eq!(cache_before_remove, cache_after_remove, "remove must keep cache");
+    assert_eq!(
+        cache_before_remove, cache_after_remove,
+        "remove must keep cache"
+    );
     ved(root, &["undo", "demo.json"]);
     assert_eq!(mock.synthesis_count(), 2);
     ved(root, &["redo", "demo.json"]);
