@@ -1,8 +1,8 @@
 name: Phase 3 verification
 
 on:
-  push:
-    branches: [feature/phase3-tts]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
