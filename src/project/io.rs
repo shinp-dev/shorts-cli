@@ -15,14 +15,11 @@ pub fn load(path: &Path) -> Result<Project> {
             path: path.to_path_buf(),
             source,
         })?;
-    match json.get("version").and_then(serde_json::Value::as_u64) {
-        Some(1 | 2) => {
-            json["version"] = serde_json::Value::from(crate::project::PROJECT_VERSION);
-            if json.get("voice_clips").is_none() {
-                json["voice_clips"] = serde_json::Value::Array(Vec::new());
-            }
+    if let Some(1 | 2) = json.get("version").and_then(serde_json::Value::as_u64) {
+        json["version"] = serde_json::Value::from(crate::project::PROJECT_VERSION);
+        if json.get("voice_clips").is_none() {
+            json["voice_clips"] = serde_json::Value::Array(Vec::new());
         }
-        _ => {}
     }
     let project: Project = serde_json::from_value(json).map_err(|source| VedError::Json {
         path: path.to_path_buf(),

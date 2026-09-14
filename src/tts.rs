@@ -17,8 +17,6 @@ const AIVIS_ENDPOINT: &str = "http://127.0.0.1:10101";
 
 #[derive(Debug, thiserror::Error)]
 pub enum TtsError {
-    #[error("unsupported provider: {0}")]
-    UnsupportedProvider(String),
     #[error("engine not running: {provider} at {endpoint}")]
     EngineNotRunning { provider: String, endpoint: String },
     #[error("connection refused: {provider} at {endpoint}")]
@@ -59,7 +57,6 @@ pub struct SynthesizedAudio {
     pub engine_identity: String,
     pub cache_key: String,
     pub endpoint: String,
-    pub path: PathBuf,
     pub stored_path: String,
     pub probe: MediaProbe,
 }
@@ -187,10 +184,6 @@ fn provider(kind: TtsProviderKind) -> Box<dyn TtsProvider> {
     }
 }
 
-pub fn default_endpoint(kind: TtsProviderKind) -> &'static str {
-    provider(kind).default_endpoint()
-}
-
 pub fn list_voices(kind: TtsProviderKind, endpoint: Option<&str>) -> Result<Vec<VoiceInfo>> {
     let provider = provider(kind);
     let endpoint = normalize_endpoint(endpoint.unwrap_or(provider.default_endpoint()))?;
@@ -251,7 +244,6 @@ pub fn synthesize_cached(
                     cache_key,
                     endpoint,
                     stored_path: stored_cache_path(&target, project_path),
-                    path: target,
                     probe,
                 });
             }
@@ -313,7 +305,6 @@ pub fn synthesize_cached(
                 cache_key,
                 endpoint,
                 stored_path: stored_cache_path(&target, project_path),
-                path: target,
                 probe: target_probe,
             });
         }
@@ -332,7 +323,6 @@ pub fn synthesize_cached(
         cache_key,
         endpoint,
         stored_path: stored_cache_path(&target, project_path),
-        path: target,
         probe,
     })
 }
@@ -347,7 +337,6 @@ pub fn ensure_project_audio(project_path: &Path, project: &mut Project) -> Resul
                 cache_key: voice.cache_key.clone(),
                 endpoint: voice.endpoint.clone(),
                 stored_path: stored_cache_path(&expected, project_path),
-                path: expected,
                 probe,
             },
             Err(_) => synthesize_cached(
@@ -853,7 +842,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(first.path.is_file());
+        assert!(Path::new(&first.stored_path).ends_with(format!("{}.wav", first.cache_key)));
         let before = requests
             .lock()
             .unwrap()

@@ -327,7 +327,7 @@ fn tts_connection_and_invalid_audio_fail_cleanly() {
             || std::fs::read_dir(root.join(".ved/cache/tts"))
                 .unwrap()
                 .filter_map(|entry| entry.ok())
-                .all(|entry| !entry.path().extension().is_some_and(|value| value == "wav")),
+                .all(|entry| entry.path().extension().is_none_or(|value| value != "wav")),
         "invalid WAV must not become a cache entry"
     );
 }
