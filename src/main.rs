@@ -5,6 +5,7 @@ mod ffmpeg;
 mod history;
 mod project;
 mod timeline;
+mod tts;
 
 fn main() {
     if let Err(error) = cli::run() {
