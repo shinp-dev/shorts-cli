@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   verify:
@@ -20,44 +20,29 @@ jobs:
           components: rustfmt, clippy
       - name: Install FFmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      - name: Apply self-audit fixes
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('src/tts.rs')
-          text = path.read_text()
-          text = text.replace(
-              '        validate_wav(&temp)\n    })();',
-              '        validate_wav(&temp).map_err(|error| TtsError::InvalidReturnedAudio(error.to_string()))\n    })();'
-          )
-          old = '    match flavor {\n        QueryFlavor::Voicevox => {}\n        QueryFlavor::Aivis => {\n            // AivisSpeech reuses the `kana` field as normal source text. Preserve the engine\'s\n            // value if present and populate it only when omitted/null so synthesis stays natural.\n            if object.get("kana").is_none_or(serde_json::Value::is_null) {\n                object.insert("kana".into(), serde_json::Value::from(request.text));\n            }\n        }\n    }'
-          new = '    match flavor {\n        QueryFlavor::Voicevox => {}\n        QueryFlavor::Aivis => {\n            // Keep AivisSpeech query handling isolated from VOICEVOX even where the current\n            // fields are shared. Provider-specific fields can be added here without coupling.\n        }\n    }'
-          text = text.replace(old, new)
-          path.write_text(text)
-          path = Path('tests/integration_phase3.rs')
-          text = path.read_text()
-          marker = '\nstruct MockEngine {'
-          audit_test = '\n\n#[test]\nfn doctor_remains_non_fatal_when_local_tts_engines_are_unavailable() {\n    let directory = tempfile::tempdir().unwrap();\n    let output = ved(directory.path(), &["doctor"]);\n    let stdout = String::from_utf8_lossy(&output.stdout);\n    assert!(stdout.contains("VOICEVOX"));\n    assert!(stdout.contains("AivisSpeech"));\n}\n'
-          if 'doctor_remains_non_fatal_when_local_tts_engines_are_unavailable' not in text:
-              text = text.replace(marker, audit_test + marker)
-          path.write_text(text)
-          PY
-          cargo fmt
-      - name: Commit self-audit fixes
-        run: |
-          if ! git diff --quiet; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add src tests
-            git commit -m "Address Phase 3 self-audit findings"
-            git push origin HEAD:feature/phase3-tts
-          fi
       - name: Format check
         run: cargo fmt --check
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
-      - name: Tests
-        run: cargo test --all-targets
+      - name: Unit tests
+        run: cargo test --bin ved
+      - name: Integration tests
+        run: |
+          cargo test --test integration_phase2
+          cargo test --test integration_phase3
+      - name: TTS mock tests
+        run: |
+          cargo test --test integration_phase3 phase_three_tts_uses_audio_clip_cache_history_and_render_plan -- --exact
+          cargo test --test integration_phase3 tts_connection_and_invalid_audio_fail_cleanly -- --exact
+          cargo test --bin ved tts::tests::mock_provider_lists_and_synthesizes_special_text -- --exact
+      - name: Cache matrix
+        run: cargo test --bin ved tts::tests::cache_key_matrix_excludes_timeline_and_volume -- --exact
+      - name: Phase 1 and Phase 2 regression
+        run: |
+          cargo test --test integration_phase2 phase_one_edit_and_render_flow_regresses_cleanly -- --exact
+          cargo test --test integration_phase2 phase_two_pipeline_uses_one_final_timeline -- --exact
+      - name: Doctor regression
+        run: cargo test --test integration_phase3 doctor_remains_non_fatal_when_local_tts_engines_are_unavailable -- --exact
       - name: Diff check
         run: git diff --check
       - name: Working tree
