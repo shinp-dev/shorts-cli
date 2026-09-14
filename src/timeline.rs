@@ -1,5 +1,5 @@
 use crate::error::{Result, message};
-use crate::project::{Clip, MediaKind, Project};
+use crate::project::{Clip, MediaKind, Project, validate_speed};
 
 const EPSILON: f64 = 0.000_001;
 
@@ -16,7 +16,7 @@ pub fn resolve(project: &Project) -> Vec<ResolvedClip> {
         .timeline
         .iter()
         .map(|clip| {
-            let duration = clip.source_out - clip.source_in;
+            let duration = (clip.source_out - clip.source_in) / clip.speed;
             let resolved = ResolvedClip {
                 clip: clip.clone(),
                 timeline_start: cursor,
@@ -32,7 +32,7 @@ pub fn duration(project: &Project) -> f64 {
     project
         .timeline
         .iter()
-        .map(|clip| clip.source_out - clip.source_in)
+        .map(|clip| (clip.source_out - clip.source_in) / clip.speed)
         .sum()
 }
 
@@ -88,7 +88,7 @@ pub fn insert(
         return Ok(inserted_id);
     }
 
-    let split_source = item.clip.source_in + (at - item.timeline_start);
+    let split_source = item.clip.source_in + (at - item.timeline_start) * item.clip.speed;
     let mut right = item.clip.clone();
     right.id = next_clip_id_excluding(project, &[&inserted_id]);
     right.source_in = split_source;
@@ -115,6 +115,17 @@ pub fn trim(
     validate_source_range(project, &old.media_id, new_in, new_out)?;
     project.timeline[index].source_in = new_in;
     project.timeline[index].source_out = new_out;
+    Ok(())
+}
+
+pub fn speed(project: &mut Project, clip_id: &str, rate: f64) -> Result<()> {
+    validate_speed(rate)?;
+    let clip = project
+        .timeline
+        .iter_mut()
+        .find(|clip| clip.id == clip_id)
+        .ok_or_else(|| message(format!("clip {clip_id} does not exist")))?;
+    clip.speed = rate;
     Ok(())
 }
 
@@ -147,12 +158,12 @@ pub fn remove(project: &mut Project, from: f64, to: f64) -> Result<()> {
             (item.timeline_end - to).clamp(0.0, item.timeline_end - item.timeline_start);
         if left_duration > EPSILON {
             let mut left = item.clip.clone();
-            left.source_out = left.source_in + left_duration;
+            left.source_out = left.source_in + left_duration * left.speed;
             output.push(left);
         }
         if right_duration > EPSILON {
             let mut right = item.clip.clone();
-            right.source_in = right.source_out - right_duration;
+            right.source_in = right.source_out - right_duration * right.speed;
             if left_duration > EPSILON {
                 right.id = next_id_from_reserved("c", &reserved_ids);
                 reserved_ids.push(right.id.clone());
@@ -190,6 +201,7 @@ fn new_clip(
         media_id: media.id.clone(),
         source_in,
         source_out,
+        speed: 1.0,
         mute: false,
         volume: 1.0,
     })
@@ -310,6 +322,29 @@ mod tests {
         assert_eq!(p, before);
         assert!(remove(&mut p, 0.0, 3.0).is_err());
         assert_eq!(p, before);
+    }
+
+    #[test]
+    fn speed_changes_final_duration_and_split_source_mapping() {
+        let mut p = project();
+        add(&mut p, "m1", Some(0.0), Some(9.0)).unwrap();
+        speed(&mut p, "c1", 1.5).unwrap();
+        assert_eq!(duration(&p), 6.0);
+        insert(&mut p, "m1", 2.0, Some(0.0), Some(1.0)).unwrap();
+        assert_eq!(p.timeline[0].source_out, 3.0);
+        assert_eq!(p.timeline[2].source_in, 3.0);
+        assert_eq!(duration(&p), 7.0);
+    }
+
+    #[test]
+    fn remove_maps_final_time_through_speed() {
+        let mut p = project();
+        add(&mut p, "m1", Some(0.0), Some(9.0)).unwrap();
+        speed(&mut p, "c1", 1.5).unwrap();
+        remove(&mut p, 1.0, 3.0).unwrap();
+        assert_eq!(p.timeline[0].source_out, 1.5);
+        assert_eq!(p.timeline[1].source_in, 4.5);
+        assert_eq!(duration(&p), 4.0);
     }
 
     #[test]

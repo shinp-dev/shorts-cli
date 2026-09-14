@@ -10,7 +10,15 @@ pub fn load(path: &Path) -> Result<Project> {
         path: path.to_path_buf(),
         source,
     })?;
-    let project: Project = serde_json::from_slice(&bytes).map_err(|source| VedError::Json {
+    let mut json: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|source| VedError::Json {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if json.get("version").and_then(serde_json::Value::as_u64) == Some(1) {
+        json["version"] = serde_json::Value::from(crate::project::PROJECT_VERSION);
+    }
+    let project: Project = serde_json::from_value(json).map_err(|source| VedError::Json {
         path: path.to_path_buf(),
         source,
     })?;
@@ -137,5 +145,21 @@ mod tests {
             1,
             "temporary save file should not remain"
         );
+    }
+
+    #[test]
+    fn version_one_project_migrates_in_memory() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("project.json");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"canvas":{"width":1080,"height":1920,"fps":30},"media":[],"timeline":[]}"#,
+        )
+        .unwrap();
+        let migrated = load(&path).unwrap();
+        assert_eq!(migrated.version, crate::project::PROJECT_VERSION);
+        assert!(migrated.text_overlays.is_empty());
+        assert!(migrated.image_overlays.is_empty());
+        assert!(migrated.audio_clips.is_empty());
     }
 }

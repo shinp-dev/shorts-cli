@@ -39,15 +39,19 @@ struct ProbeFormat {
 }
 
 pub fn probe(path: &Path) -> Result<(MediaKind, MediaProbe)> {
-    let output = Command::new("ffprobe")
-        .args([
-            "-v",
-            "error",
-            "-show_streams",
-            "-show_format",
-            "-of",
-            "json",
-        ])
+    let mut command = Command::new("ffprobe");
+    command.args([
+        "-v",
+        "error",
+        "-show_streams",
+        "-show_format",
+        "-of",
+        "json",
+    ]);
+    if is_static_image(path) {
+        command.args(["-f", "image2", "-pattern_type", "none"]);
+    }
+    let output = command
         .arg(path)
         .output()
         .map_err(|source| VedError::Process {

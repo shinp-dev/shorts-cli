@@ -2,6 +2,7 @@ mod cli;
 mod compiler;
 mod error;
 mod ffmpeg;
+mod history;
 mod project;
 mod timeline;
 
