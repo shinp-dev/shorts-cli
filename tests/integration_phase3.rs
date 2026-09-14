@@ -332,6 +332,15 @@ fn tts_connection_and_invalid_audio_fail_cleanly() {
     );
 }
 
+#[test]
+fn doctor_remains_non_fatal_when_local_tts_engines_are_unavailable() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = ved(directory.path(), &["doctor"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("VOICEVOX"));
+    assert!(stdout.contains("AivisSpeech"));
+}
+
 struct MockEngine {
     endpoint: String,
     paths: Arc<Mutex<Vec<String>>>,

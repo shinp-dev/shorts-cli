@@ -284,7 +284,7 @@ pub fn synthesize_cached(
         file.sync_all()
             .map_err(|error| TtsError::CacheWriteFailure(error.to_string()))?;
         drop(file);
-        validate_wav(&temp)
+        validate_wav(&temp).map_err(|error| TtsError::InvalidReturnedAudio(error.to_string()))
     })();
 
     let probe = match write_result {
@@ -682,11 +682,8 @@ fn apply_query_parameters(
     match flavor {
         QueryFlavor::Voicevox => {}
         QueryFlavor::Aivis => {
-            // AivisSpeech reuses the `kana` field as normal source text. Preserve the engine's
-            // value if present and populate it only when omitted/null so synthesis stays natural.
-            if object.get("kana").is_none_or(serde_json::Value::is_null) {
-                object.insert("kana".into(), serde_json::Value::from(request.text));
-            }
+            // Keep AivisSpeech query handling isolated from VOICEVOX even where the current
+            // fields are shared. Provider-specific fields can be added here without coupling.
         }
     }
     Ok(())
