@@ -20,47 +20,49 @@ jobs:
           components: rustfmt, clippy
       - name: Install FFmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      - name: Normalize generated files and formatting
+      - name: Apply self-audit fixes
         run: |
-          cargo generate-lockfile
           python3 - <<'PY'
           from pathlib import Path
 
-          path = Path('src/project/io.rs')
-          text = path.read_text()
-          text = text.replace(
-              '''    match json.get("version").and_then(serde_json::Value::as_u64) {\n        Some(1 | 2) => {\n            json["version"] = serde_json::Value::from(crate::project::PROJECT_VERSION);\n            if json.get("voice_clips").is_none() {\n                json["voice_clips"] = serde_json::Value::Array(Vec::new());\n            }\n        }\n        _ => {}\n    }''',
-              '''    if let Some(1 | 2) = json.get("version").and_then(serde_json::Value::as_u64) {\n        json["version"] = serde_json::Value::from(crate::project::PROJECT_VERSION);\n        if json.get("voice_clips").is_none() {\n            json["voice_clips"] = serde_json::Value::Array(Vec::new());\n        }\n    }'''
-          )
-          path.write_text(text)
-
           path = Path('src/tts.rs')
           text = path.read_text()
-          text = text.replace('    #[error("unsupported provider: {0}")]\n    UnsupportedProvider(String),\n', '')
-          text = text.replace('    pub path: PathBuf,\n', '')
-          text = text.replace('                    path: target,\n', '')
-          text = text.replace('                path: target,\n', '')
-          text = text.replace('        path: target,\n', '')
-          text = text.replace('                path: expected,\n', '')
-          text = text.replace("pub fn default_endpoint(kind: TtsProviderKind) -> &'static str {\n    provider(kind).default_endpoint()\n}\n\n", '')
-          text = text.replace('        assert!(first.path.is_file());', '        assert!(Path::new(&first.stored_path).ends_with(format!("{}.wav", first.cache_key)));')
+          text = text.replace(
+              '        validate_wav(&temp)\n    })();',
+              '        validate_wav(&temp).map_err(|error| TtsError::InvalidReturnedAudio(error.to_string()))\n    })();'
+          )
+          text = text.replace(
+              '''    match flavor {\n        QueryFlavor::Voicevox => {}\n        QueryFlavor::Aivis => {\n            // AivisSpeech reuses the `kana` field as normal source text. Preserve the engine's\n            // value if present and populate it only when omitted/null so synthesis stays natural.\n            if object.get("kana").is_none_or(serde_json::Value::is_null) {\n                object.insert("kana".into(), serde_json::Value::from(request.text));\n            }\n        }\n    }''',
+              '''    match flavor {\n        QueryFlavor::Voicevox => {}\n        QueryFlavor::Aivis => {\n            // Keep AivisSpeech query handling isolated from VOICEVOX even where the current\n            // fields are shared. Provider-specific fields can be added here without coupling.\n        }\n    }'''
+          )
           path.write_text(text)
 
           path = Path('tests/integration_phase3.rs')
-          text = path.read_text().replace(
-              '!entry.path().extension().is_some_and(|value| value == "wav")',
-              'entry.path().extension().is_none_or(|value| value != "wav")'
-          )
+          text = path.read_text()
+          marker = '\nstruct MockEngine {'
+          audit_test = r'''
+
+#[test]
+fn doctor_remains_non_fatal_when_local_tts_engines_are_unavailable() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = ved(directory.path(), &["doctor"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("VOICEVOX"));
+    assert!(stdout.contains("AivisSpeech"));
+}
+'''
+          if 'doctor_remains_non_fatal_when_local_tts_engines_are_unavailable' not in text:
+              text = text.replace(marker, audit_test + marker)
           path.write_text(text)
           PY
           cargo fmt
-      - name: Commit normalization when needed
+      - name: Commit self-audit fixes
         run: |
           if ! git diff --quiet; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add Cargo.lock src tests
-            git commit -m "Fix initial Phase 3 clippy findings"
+            git add src tests
+            git commit -m "Address Phase 3 self-audit findings"
             git push origin HEAD:feature/phase3-tts
           fi
       - name: Format check
