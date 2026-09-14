@@ -28,7 +28,7 @@ A `VoiceClip` owns only synthesis identity and the link to its normal audio clip
   "speed": 1.0,
   "pitch": 0.0,
   "endpoint": "http://127.0.0.1:50021",
-  "engine_identity": "VOICEVOX:0.24.1",
+  "engine_identity": "voicevox:0.24.1",
   "cache_key": "...",
   "audio_clip_id": "a2"
 }
@@ -100,10 +100,10 @@ Changes to text, voice, speed or pitch derive a new cache key and synthesize onl
 for the configured local default endpoints. An unavailable TTS engine is reported but does not make
 `doctor` or unrelated editing commands fail.
 
-TTS errors are classified at the provider/cache boundary into unsupported provider, engine not
-running / connection failure, invalid voice, invalid parameter, synthesis failure, invalid returned
-audio, cache write failure, and cache validation failure. Normal errors remain concise; verbose
-provider diagnostics are not dumped by default.
+Unsupported provider names are rejected by CLI parsing. Provider/cache failures are classified as
+engine not running / connection failure, invalid voice, invalid parameter, synthesis failure,
+invalid returned audio, cache write failure, and cache validation failure. Normal errors remain
+concise; verbose provider diagnostics are not dumped by default.
 
 ## Security boundary
 
