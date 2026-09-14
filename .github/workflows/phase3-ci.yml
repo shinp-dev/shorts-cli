@@ -1,0 +1,39 @@
+name: Phase 3 verification
+
+on:
+  push:
+    branches: [feature/phase3-tts]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.92.0
+        with:
+          components: rustfmt, clippy
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Generate lockfile
+        run: cargo generate-lockfile
+      - name: Format check
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --all-targets
+      - name: Diff check
+        run: git diff --check
+      - name: Working tree
+        run: git status --short
+      - name: Lockfile base64
+        if: always()
+        run: |
+          echo LOCKFILE_BEGIN
+          base64 -w0 Cargo.lock
+          echo
+          echo LOCKFILE_END
