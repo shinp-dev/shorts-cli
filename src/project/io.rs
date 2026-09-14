@@ -15,8 +15,11 @@ pub fn load(path: &Path) -> Result<Project> {
             path: path.to_path_buf(),
             source,
         })?;
-    if json.get("version").and_then(serde_json::Value::as_u64) == Some(1) {
+    if let Some(1 | 2) = json.get("version").and_then(serde_json::Value::as_u64) {
         json["version"] = serde_json::Value::from(crate::project::PROJECT_VERSION);
+        if json.get("voice_clips").is_none() {
+            json["voice_clips"] = serde_json::Value::Array(Vec::new());
+        }
     }
     let project: Project = serde_json::from_value(json).map_err(|source| VedError::Json {
         path: path.to_path_buf(),
@@ -148,18 +151,23 @@ mod tests {
     }
 
     #[test]
-    fn version_one_project_migrates_in_memory() {
+    fn version_one_and_two_projects_migrate_in_memory() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("project.json");
-        std::fs::write(
-            &path,
-            r#"{"version":1,"canvas":{"width":1080,"height":1920,"fps":30},"media":[],"timeline":[]}"#,
-        )
-        .unwrap();
-        let migrated = load(&path).unwrap();
-        assert_eq!(migrated.version, crate::project::PROJECT_VERSION);
-        assert!(migrated.text_overlays.is_empty());
-        assert!(migrated.image_overlays.is_empty());
-        assert!(migrated.audio_clips.is_empty());
+        for version in [1, 2] {
+            let path = directory.path().join(format!("project-{version}.json"));
+            std::fs::write(
+                &path,
+                format!(
+                    "{{\"version\":{version},\"canvas\":{{\"width\":1080,\"height\":1920,\"fps\":30}},\"media\":[],\"timeline\":[]}}"
+                ),
+            )
+            .unwrap();
+            let migrated = load(&path).unwrap();
+            assert_eq!(migrated.version, crate::project::PROJECT_VERSION);
+            assert!(migrated.text_overlays.is_empty());
+            assert!(migrated.image_overlays.is_empty());
+            assert!(migrated.audio_clips.is_empty());
+            assert!(migrated.voice_clips.is_empty());
+        }
     }
 }

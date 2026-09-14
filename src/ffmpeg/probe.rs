@@ -1,7 +1,5 @@
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::Path;
 use std::process::Command;
-use std::time::Duration;
 
 use serde::Deserialize;
 
@@ -152,8 +150,14 @@ pub fn doctor() -> Vec<ToolStatus> {
         version: None,
         detail: Some(codec_detail),
     });
-    statuses.push(local_service("VOICEVOX", 50021));
-    statuses.push(local_service("AivisSpeech", 10101));
+    for status in crate::tts::doctor() {
+        statuses.push(ToolStatus {
+            name: status.name,
+            available: status.available,
+            version: None,
+            detail: Some(format!("{}; {}", status.endpoint, status.detail)),
+        });
+    }
     statuses
 }
 
@@ -180,17 +184,6 @@ fn tool_status(name: &'static str) -> ToolStatus {
             version: None,
             detail: Some(error.to_string()),
         },
-    }
-}
-
-fn local_service(name: &'static str, port: u16) -> ToolStatus {
-    let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
-    let available = TcpStream::connect_timeout(&address, Duration::from_millis(250)).is_ok();
-    ToolStatus {
-        name,
-        available,
-        version: None,
-        detail: Some(format!("127.0.0.1:{port}")),
     }
 }
 
