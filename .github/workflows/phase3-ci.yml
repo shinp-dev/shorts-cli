@@ -24,33 +24,20 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-
           path = Path('src/tts.rs')
           text = path.read_text()
           text = text.replace(
               '        validate_wav(&temp)\n    })();',
               '        validate_wav(&temp).map_err(|error| TtsError::InvalidReturnedAudio(error.to_string()))\n    })();'
           )
-          text = text.replace(
-              '''    match flavor {\n        QueryFlavor::Voicevox => {}\n        QueryFlavor::Aivis => {\n            // AivisSpeech reuses the `kana` field as normal source text. Preserve the engine's\n            // value if present and populate it only when omitted/null so synthesis stays natural.\n            if object.get("kana").is_none_or(serde_json::Value::is_null) {\n                object.insert("kana".into(), serde_json::Value::from(request.text));\n            }\n        }\n    }''',
-              '''    match flavor {\n        QueryFlavor::Voicevox => {}\n        QueryFlavor::Aivis => {\n            // Keep AivisSpeech query handling isolated from VOICEVOX even where the current\n            // fields are shared. Provider-specific fields can be added here without coupling.\n        }\n    }'''
-          )
+          old = '    match flavor {\n        QueryFlavor::Voicevox => {}\n        QueryFlavor::Aivis => {\n            // AivisSpeech reuses the `kana` field as normal source text. Preserve the engine\'s\n            // value if present and populate it only when omitted/null so synthesis stays natural.\n            if object.get("kana").is_none_or(serde_json::Value::is_null) {\n                object.insert("kana".into(), serde_json::Value::from(request.text));\n            }\n        }\n    }'
+          new = '    match flavor {\n        QueryFlavor::Voicevox => {}\n        QueryFlavor::Aivis => {\n            // Keep AivisSpeech query handling isolated from VOICEVOX even where the current\n            // fields are shared. Provider-specific fields can be added here without coupling.\n        }\n    }'
+          text = text.replace(old, new)
           path.write_text(text)
-
           path = Path('tests/integration_phase3.rs')
           text = path.read_text()
           marker = '\nstruct MockEngine {'
-          audit_test = r'''
-
-#[test]
-fn doctor_remains_non_fatal_when_local_tts_engines_are_unavailable() {
-    let directory = tempfile::tempdir().unwrap();
-    let output = ved(directory.path(), &["doctor"]);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("VOICEVOX"));
-    assert!(stdout.contains("AivisSpeech"));
-}
-'''
+          audit_test = '\n\n#[test]\nfn doctor_remains_non_fatal_when_local_tts_engines_are_unavailable() {\n    let directory = tempfile::tempdir().unwrap();\n    let output = ved(directory.path(), &["doctor"]);\n    let stdout = String::from_utf8_lossy(&output.stdout);\n    assert!(stdout.contains("VOICEVOX"));\n    assert!(stdout.contains("AivisSpeech"));\n}\n'
           if 'doctor_remains_non_fatal_when_local_tts_engines_are_unavailable' not in text:
               text = text.replace(marker, audit_test + marker)
           path.write_text(text)
