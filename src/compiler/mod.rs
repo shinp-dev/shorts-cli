@@ -13,6 +13,16 @@ pub fn compile(
     project: &Project,
     range: Option<TimeRange>,
 ) -> Result<RenderPlan> {
+    let mut project = project.clone();
+    crate::tts::ensure_project_audio(project_path, &mut project)?;
+    compile_materialized(project_path, &project, range)
+}
+
+fn compile_materialized(
+    project_path: &Path,
+    project: &Project,
+    range: Option<TimeRange>,
+) -> Result<RenderPlan> {
     let total = timeline::duration(project);
     if total <= 0.0 {
         return Err(message("timeline is empty"));

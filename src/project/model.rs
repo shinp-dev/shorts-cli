@@ -22,6 +22,8 @@ pub struct Project {
     pub audio_clips: Vec<AudioClip>,
     #[serde(default)]
     pub audio_ducking: Vec<AudioDucking>,
+    #[serde(default)]
+    pub voice_clips: Vec<VoiceClip>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -165,6 +167,37 @@ pub struct AudioClip {
     pub fade_out: f64,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum TtsProviderKind {
+    Voicevox,
+    Aivis,
+}
+
+impl TtsProviderKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Voicevox => "voicevox",
+            Self::Aivis => "aivis",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct VoiceClip {
+    pub id: String,
+    pub provider: TtsProviderKind,
+    pub voice: String,
+    pub text: String,
+    pub speed: f64,
+    pub pitch: f64,
+    pub endpoint: String,
+    pub engine_identity: String,
+    pub cache_key: String,
+    pub audio_clip_id: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AudioDucking {
@@ -252,6 +285,7 @@ impl Project {
             image_overlays: Vec::new(),
             audio_clips: Vec::new(),
             audio_ducking: Vec::new(),
+            voice_clips: Vec::new(),
         }
     }
 
@@ -490,6 +524,66 @@ impl Project {
                     )));
                 }
             }
+            validate_unique_ids(
+                "voice clip",
+                self.voice_clips.iter().map(|item| item.id.as_str()),
+            )?;
+            let mut linked_audio = std::collections::HashSet::new();
+            for voice in &self.voice_clips {
+                if voice.voice.is_empty() {
+                    return Err(message(format!(
+                        "voice clip {} has an empty voice id",
+                        voice.id
+                    )));
+                }
+                if voice.text.is_empty() || voice.text.contains('\0') {
+                    return Err(message(format!("voice clip {} has invalid text", voice.id)));
+                }
+                if !voice.speed.is_finite() || voice.speed <= 0.0 {
+                    return Err(message(format!(
+                        "voice clip {} has invalid speed",
+                        voice.id
+                    )));
+                }
+                if !voice.pitch.is_finite() {
+                    return Err(message(format!(
+                        "voice clip {} has invalid pitch",
+                        voice.id
+                    )));
+                }
+                if voice.endpoint.is_empty()
+                    || voice.engine_identity.is_empty()
+                    || voice.cache_key.is_empty()
+                {
+                    return Err(message(format!(
+                        "voice clip {} has incomplete TTS identity",
+                        voice.id
+                    )));
+                }
+                if !linked_audio.insert(voice.audio_clip_id.as_str()) {
+                    return Err(message(format!(
+                        "audio clip {} is linked by more than one voice clip",
+                        voice.audio_clip_id
+                    )));
+                }
+                let audio = self
+                    .audio_clips
+                    .iter()
+                    .find(|item| item.id == voice.audio_clip_id)
+                    .ok_or_else(|| {
+                        message(format!(
+                            "voice clip {} refers to missing audio clip {}",
+                            voice.id, voice.audio_clip_id
+                        ))
+                    })?;
+                let media = self.media_by_id(&audio.media_id)?;
+                if media.kind != MediaKind::Audio {
+                    return Err(message(format!(
+                        "voice clip {} does not resolve to audio media",
+                        voice.id
+                    )));
+                }
+            }
         }
         Ok(())
     }
@@ -526,6 +620,9 @@ impl Project {
     }
     pub fn next_ducking_id(&self) -> String {
         next_id("d", self.audio_ducking.iter().map(|item| item.id.as_str()))
+    }
+    pub fn next_voice_id(&self) -> String {
+        next_id("v", self.voice_clips.iter().map(|item| item.id.as_str()))
     }
 }
 

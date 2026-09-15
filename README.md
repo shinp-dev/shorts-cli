@@ -76,6 +76,9 @@ mix through FFmpeg's EBU R128 `loudnorm` analysis and reuses a content-addressed
 `waveform` writes a deterministic PNG and can place compact min/max peaks in a separate
 JSON artifact. `markers` exports stable marker IDs as JSON, CSV, WebVTT, or FFmetadata.
 
+AI agents and contributors should read the canonical boundary contract in
+[`docs/agent-contract.md`](docs/agent-contract.md) before changing behavior.
+
 The reviewed Phase 1 contracts and deferred design decisions are in
 [`docs/design-phase-1.md`](docs/design-phase-1.md).
 Phase 2 schema and time-coordinate decisions are in

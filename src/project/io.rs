@@ -20,6 +20,9 @@ pub fn load(path: &Path) -> Result<Project> {
         Some(1 | 2)
     ) {
         json["version"] = serde_json::Value::from(crate::project::PROJECT_VERSION);
+        if json.get("voice_clips").is_none() {
+            json["voice_clips"] = serde_json::Value::Array(Vec::new());
+        }
     }
     let project: Project = serde_json::from_value(json).map_err(|source| VedError::Json {
         path: path.to_path_buf(),
@@ -172,6 +175,7 @@ mod tests {
             assert!(migrated.image_overlays.is_empty());
             assert!(migrated.audio_clips.is_empty());
             assert!(migrated.audio_ducking.is_empty());
+            assert!(migrated.voice_clips.is_empty());
         }
     }
 }
