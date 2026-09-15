@@ -4,6 +4,8 @@ use std::path::PathBuf;
 pub enum VedError {
     #[error("{0}")]
     Message(String),
+    #[error("{message}")]
+    Coded { code: &'static str, message: String },
     #[error("cannot read or write {path}: {source}")]
     Io {
         path: PathBuf,
@@ -34,4 +36,11 @@ pub type Result<T> = std::result::Result<T, VedError>;
 
 pub fn message(value: impl Into<String>) -> VedError {
     VedError::Message(value.into())
+}
+
+pub fn coded(code: &'static str, value: impl Into<String>) -> VedError {
+    VedError::Coded {
+        code,
+        message: value.into(),
+    }
 }

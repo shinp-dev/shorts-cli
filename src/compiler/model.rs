@@ -18,6 +18,7 @@ pub struct RenderVideoSegment {
     pub source_in: f64,
     pub source_out: f64,
     pub speed: f64,
+    pub hold_duration: Option<f64>,
     pub has_audio: bool,
     pub volume: f64,
 }
@@ -63,14 +64,27 @@ pub struct RenderAudioClip {
     pub path: PathBuf,
     pub source_in: f64,
     pub source_out: f64,
+    pub speed: f64,
+    pub r#loop: bool,
+    pub track: Option<String>,
     pub timeline_start: f64,
     pub timeline_end: f64,
     pub clip_offset: f64,
+    pub input_trim_offset: f64,
     pub clip_duration: f64,
     pub volume: f64,
     pub mute: bool,
     pub fade_in: f64,
     pub fade_out: f64,
+    pub ducking: Vec<RenderDucking>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RenderDucking {
+    pub reduction_db: f64,
+    pub attack: f64,
+    pub release: f64,
+    pub intervals: Vec<TimeRange>,
 }
 
 #[derive(Debug, Clone, Serialize)]

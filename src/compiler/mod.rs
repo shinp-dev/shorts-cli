@@ -5,7 +5,7 @@ pub use model::*;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Result, message};
-use crate::project::{Axis, Project};
+use crate::project::{Axis, Project, TimelineItem};
 use crate::timeline;
 
 pub fn compile(
@@ -44,19 +44,48 @@ pub fn compile(
         if overlap_end <= overlap_start + 0.000_001 {
             continue;
         }
-        let media = project.media_by_id(&item.clip.media_id)?;
-        let path = media_path(project_path, &media.path)?;
-        video_segments.push(RenderVideoSegment {
-            clip_id: item.clip.id,
-            media_id: media.id.clone(),
-            path,
-            source_in: item.clip.source_in
-                + (overlap_start - item.timeline_start) * item.clip.speed,
-            source_out: item.clip.source_in + (overlap_end - item.timeline_start) * item.clip.speed,
-            speed: item.clip.speed,
-            has_audio: media.probe.has_audio && !item.clip.mute,
-            volume: item.clip.volume,
-        });
+        match &item.item {
+            TimelineItem::Clip(clip) => {
+                let media = project.media_by_id(&clip.media_id)?;
+                let path = media_path(project_path, &media.path)?;
+                video_segments.push(RenderVideoSegment {
+                    clip_id: clip.id.clone(),
+                    media_id: media.id.clone(),
+                    path,
+                    source_in: clip.source_in + (overlap_start - item.timeline_start) * clip.speed,
+                    source_out: clip.source_in + (overlap_end - item.timeline_start) * clip.speed,
+                    speed: clip.speed,
+                    hold_duration: None,
+                    has_audio: media.probe.has_audio && !clip.mute,
+                    volume: clip.volume,
+                });
+            }
+            TimelineItem::Hold(hold) => {
+                let media = project.media_by_id(&hold.media_id)?;
+                let path = media_path(project_path, &media.path)?;
+                let frame_duration = 1.0
+                    / media
+                        .probe
+                        .fps
+                        .unwrap_or(f64::from(project.canvas.fps))
+                        .max(1.0);
+                let media_end = media
+                    .probe
+                    .duration
+                    .unwrap_or(hold.freeze_at + frame_duration);
+                video_segments.push(RenderVideoSegment {
+                    clip_id: hold.id.clone(),
+                    media_id: media.id.clone(),
+                    path,
+                    source_in: hold.freeze_at,
+                    source_out: (hold.freeze_at + frame_duration).min(media_end),
+                    speed: 1.0,
+                    hold_duration: Some(overlap_end - overlap_start),
+                    has_audio: false,
+                    volume: 0.0,
+                });
+            }
+        }
     }
     if video_segments.is_empty() {
         return Err(message("render range contains no video"));
@@ -120,25 +149,80 @@ pub fn compile(
     for audio in &project.audio_clips {
         let media = project.media_by_id(&audio.media_id)?;
         let source_out = audio.resolved_source_out(media)?;
-        let clip_duration = source_out - audio.source_in;
-        if let Some((start, end)) = intersect(audio.start, audio.start + clip_duration, range) {
+        let clip_duration = audio.resolved_duration(media)?;
+        let resolved_end = audio.resolved_end(media)?;
+        if let Some((start, end)) = intersect(audio.start, resolved_end, range) {
             let absolute_start = start + range.start;
             let clip_offset = absolute_start - audio.start;
+            let render_duration = end - start;
+            let (render_source_in, render_source_out, input_trim_offset) = if audio.r#loop {
+                (audio.source_in, source_out, clip_offset)
+            } else {
+                let render_source_in = audio.source_in + clip_offset * audio.speed;
+                (
+                    render_source_in,
+                    (render_source_in + render_duration * audio.speed).min(source_out),
+                    0.0,
+                )
+            };
             audio_clips.push(RenderAudioClip {
                 id: audio.id.clone(),
                 media_id: media.id.clone(),
                 path: media_path(project_path, &media.path)?,
-                source_in: audio.source_in + clip_offset,
-                source_out: audio.source_in + clip_offset + (end - start),
+                source_in: render_source_in,
+                source_out: render_source_out,
+                speed: audio.speed,
+                r#loop: audio.r#loop,
+                track: audio.track.clone(),
                 timeline_start: start,
                 timeline_end: end,
                 clip_offset,
+                input_trim_offset,
                 clip_duration,
                 volume: audio.volume,
                 mute: audio.mute,
                 fade_in: audio.fade_in,
                 fade_out: audio.fade_out,
+                ducking: Vec::new(),
             });
+        }
+    }
+
+    for duck in &project.audio_ducking {
+        let mut intervals = Vec::new();
+        for trigger in &project.audio_clips {
+            if trigger.mute
+                || trigger.volume <= 0.0
+                || !trigger
+                    .track
+                    .as_ref()
+                    .is_some_and(|track| duck.trigger_tracks.contains(track))
+            {
+                continue;
+            }
+            let media = project.media_by_id(&trigger.media_id)?;
+            let start = trigger.start;
+            let end = trigger.resolved_end(media)?;
+            if end + duck.release <= range.start || start - duck.attack >= range.end {
+                continue;
+            }
+            intervals.push(TimeRange {
+                start: start - range.start,
+                end: end - range.start,
+            });
+        }
+        if intervals.is_empty() {
+            continue;
+        }
+        for audio in &mut audio_clips {
+            if audio.track.as_deref() == Some(duck.target_track.as_str()) {
+                audio.ducking.push(RenderDucking {
+                    reduction_db: duck.reduction_db,
+                    attack: duck.attack,
+                    release: duck.release,
+                    intervals: intervals.clone(),
+                });
+            }
         }
     }
 
@@ -222,15 +306,18 @@ mod tests {
                 audio_codec: Some("aac".into()),
             },
         });
-        project.timeline.push(Clip {
-            id: "c1".into(),
-            media_id: "m1".into(),
-            source_in: 0.0,
-            source_out: 9.0,
-            speed: 1.5,
-            volume: 1.0,
-            mute: false,
-        });
+        project.timeline.push(
+            Clip {
+                id: "c1".into(),
+                media_id: "m1".into(),
+                source_in: 0.0,
+                source_out: 9.0,
+                speed: 1.5,
+                volume: 1.0,
+                mute: false,
+            }
+            .into(),
+        );
         project.text_overlays.push(TextOverlay {
             id: "t1".into(),
             text: "日本語".into(),

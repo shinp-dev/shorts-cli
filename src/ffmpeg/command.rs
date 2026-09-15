@@ -139,17 +139,65 @@ pub fn run(plan: &RenderPlan, output: &Path, kind: OutputKind) -> Result<()> {
     }
     ensure_output_is_not_input(plan, output)?;
     let prepared = PreparedCommand::new(plan, output, kind)?;
-    let status = Command::new("ffmpeg")
+    let output = Command::new("ffmpeg")
         .args(&prepared.args)
-        .status()
+        .output()
         .map_err(|source| VedError::Process {
             program: "ffmpeg".into(),
             source,
         })?;
-    if !status.success() {
-        return Err(process_failed("ffmpeg", status));
+    if !output.status.success() {
+        return Err(VedError::ProcessFailed {
+            program: "ffmpeg".into(),
+            code: output
+                .status
+                .code()
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "terminated".into()),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        });
     }
     Ok(())
+}
+
+pub fn run_overwrite(
+    plan: &RenderPlan,
+    output: &Path,
+    kind: OutputKind,
+    overwrite: bool,
+) -> Result<()> {
+    if !overwrite || !output.exists() {
+        return run(plan, output, kind);
+    }
+    ensure_output_is_not_input(plan, output)?;
+    let parent = output.parent().unwrap_or_else(|| Path::new("."));
+    let stem = output
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("output");
+    let extension = output
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("tmp");
+    let temp = parent.join(format!(
+        ".{stem}.{}.{}.tmp.{extension}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let result = (|| {
+        run(plan, &temp, kind)?;
+        if !matches!(kind, OutputKind::Frame) {
+            let _ = crate::ffmpeg::probe(&temp)?;
+        }
+        crate::project::replace_existing(&temp, output)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result
 }
 
 pub fn play(plan: &RenderPlan) -> Result<()> {
@@ -244,9 +292,15 @@ fn filter_graph(plan: &RenderPlan, text_dir: &Path) -> String {
     let height = plan.canvas.height;
     let fps = plan.canvas.fps;
     for (index, segment) in plan.video_segments.iter().enumerate() {
-        let timeline_duration = (segment.source_out - segment.source_in) / segment.speed;
-        graph.push_str(&format!("[{index}:v:0]setpts=(PTS-STARTPTS)/{},scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,fps={fps},setsar=1,format=yuv420p[v{index}];", format_number(segment.speed)));
-        if segment.has_audio {
+        let timeline_duration = segment
+            .hold_duration
+            .unwrap_or((segment.source_out - segment.source_in) / segment.speed);
+        if segment.hold_duration.is_some() {
+            graph.push_str(&format!("[{index}:v:0]setpts=PTS-STARTPTS,scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,fps={fps},tpad=stop_mode=clone:stop_duration={},trim=duration={},setsar=1,format=yuv420p[v{index}];", format_number(timeline_duration), format_number(timeline_duration)));
+        } else {
+            graph.push_str(&format!("[{index}:v:0]setpts=(PTS-STARTPTS)/{},scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,fps={fps},setsar=1,format=yuv420p[v{index}];", format_number(segment.speed)));
+        }
+        if segment.has_audio && segment.hold_duration.is_none() {
             graph.push_str(&format!("[{index}:a:0]asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,volume={},{}apad=whole_dur={},atrim=duration={}[a{index}];",
                 format_number(segment.volume), atempo_chain(segment.speed), format_number(timeline_duration), format_number(timeline_duration)));
         } else {
@@ -333,8 +387,17 @@ fn filter_graph(plan: &RenderPlan, text_dir: &Path) -> String {
             let input = audio_input_start + index;
             let volume = audio_volume_expression(audio);
             let delay_ms = (audio.timeline_start * 1000.0).round() as u64;
-            graph.push_str(&format!(";[{input}:a:0]asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,volume='{volume}':eval=frame,adelay={delay_ms}:all=1,apad=whole_dur={},atrim=duration={}[aext{index}]",
-                format_number(plan.duration), format_number(plan.duration)));
+            let render_duration = audio.timeline_end - audio.timeline_start;
+            let looping = if audio.r#loop {
+                "aloop=loop=-1:size=2147483647,".to_owned()
+            } else {
+                String::new()
+            };
+            let ducking = audio_ducking_expression(audio)
+                .map(|expression| format!(",volume='{expression}':eval=frame"))
+                .unwrap_or_default();
+            graph.push_str(&format!(";[{input}:a:0]asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,{}{looping}atrim=start={}:duration={},asetpts=PTS-STARTPTS,volume='{volume}':eval=frame,adelay={delay_ms}:all=1,apad=whole_dur={},atrim=duration={}{}[aext{index}]",
+                atempo_chain(audio.speed), format_number(audio.input_trim_offset), format_number(render_duration), format_number(plan.duration), format_number(plan.duration), ducking));
         }
         graph.push_str(";[abase]");
         for index in 0..plan.audio_clips.len() {
@@ -389,6 +452,51 @@ fn audio_volume_expression(audio: &crate::compiler::RenderAudioClip) -> String {
         ));
     }
     format!("if(isnan(t),0,{expression})")
+}
+
+fn audio_ducking_expression(audio: &crate::compiler::RenderAudioClip) -> Option<String> {
+    let mut expressions = Vec::new();
+    for rule in &audio.ducking {
+        let gain = 10_f64.powf(-rule.reduction_db / 20.0);
+        for interval in &rule.intervals {
+            let start = interval.start;
+            let end = interval.end;
+            let attack_start = (start - rule.attack).max(0.0);
+            let release_end = end + rule.release;
+            let mut expression = format_number(1.0);
+            if rule.release > 0.0 {
+                expression = format!(
+                    "if(between(t,{},{})\\,{}+(1-{})*(t-{})/{}\\,{expression})",
+                    format_number(end),
+                    format_number(release_end),
+                    format_number(gain),
+                    format_number(gain),
+                    format_number(end),
+                    format_number(rule.release)
+                );
+            }
+            expression = format!(
+                "if(between(t,{},{})\\,{}\\,{expression})",
+                format_number(start),
+                format_number(end),
+                format_number(gain)
+            );
+            if rule.attack > 0.0 && start > 0.0 {
+                expression = format!(
+                    "if(between(t,{},{})\\,1-(1-{})*(t-{})/{}\\,{expression})",
+                    format_number(attack_start),
+                    format_number(start),
+                    format_number(gain),
+                    format_number(attack_start),
+                    format_number(start - attack_start)
+                );
+            }
+            expressions.push(expression);
+        }
+    }
+    let mut values = expressions.into_iter();
+    let first = values.next()?;
+    Some(values.fold(first, |left, right| format!("min({left}\\,{right})")))
 }
 
 fn text_x(position: &RenderPosition) -> String {

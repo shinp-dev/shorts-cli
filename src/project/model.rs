@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Result, message};
 
-pub const PROJECT_VERSION: u32 = 2;
+pub const PROJECT_VERSION: u32 = 3;
 pub const DEFAULT_SPEED: f64 = 1.0;
 pub const DEFAULT_VOLUME: f64 = 1.0;
 pub const DEFAULT_OPACITY: f64 = 1.0;
@@ -13,13 +13,15 @@ pub struct Project {
     pub version: u32,
     pub canvas: Canvas,
     pub media: Vec<Media>,
-    pub timeline: Vec<Clip>,
+    pub timeline: Vec<TimelineItem>,
     #[serde(default)]
     pub text_overlays: Vec<TextOverlay>,
     #[serde(default)]
     pub image_overlays: Vec<ImageOverlay>,
     #[serde(default)]
     pub audio_clips: Vec<AudioClip>,
+    #[serde(default)]
+    pub audio_ducking: Vec<AudioDucking>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -75,6 +77,22 @@ pub struct Clip {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum TimelineItem {
+    Hold(HoldClip),
+    Clip(Clip),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct HoldClip {
+    pub id: String,
+    pub media_id: String,
+    pub freeze_at: f64,
+    pub duration: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct TextOverlay {
     pub id: String,
@@ -121,12 +139,22 @@ pub struct ImageOverlay {
 #[serde(deny_unknown_fields)]
 pub struct AudioClip {
     pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub track: Option<String>,
     pub media_id: String,
     pub start: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end: Option<f64>,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub source_in: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_out: Option<f64>,
+    #[serde(default = "default_speed", skip_serializing_if = "is_one")]
+    pub speed: f64,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub r#loop: bool,
     #[serde(default = "default_volume", skip_serializing_if = "is_one")]
     pub volume: f64,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -135,6 +163,18 @@ pub struct AudioClip {
     pub fade_in: f64,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub fade_out: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AudioDucking {
+    pub id: String,
+    pub key: String,
+    pub target_track: String,
+    pub trigger_tracks: Vec<String>,
+    pub reduction_db: f64,
+    pub attack: f64,
+    pub release: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -211,6 +251,7 @@ impl Project {
             text_overlays: Vec::new(),
             image_overlays: Vec::new(),
             audio_clips: Vec::new(),
+            audio_ducking: Vec::new(),
         }
     }
 
@@ -231,18 +272,54 @@ impl Project {
             validate_finite_optional(media.probe.duration, "media duration")?;
             validate_finite_optional(media.probe.fps, "media fps")?;
         }
-        validate_unique_ids("clip", self.timeline.iter().map(|item| item.id.as_str()))?;
-        for clip in &self.timeline {
-            let media = self.media_by_id(&clip.media_id)?;
+        validate_unique_ids("timeline item", self.timeline.iter().map(TimelineItem::id))?;
+        validate_unique_ids(
+            "video clip",
+            self.timeline
+                .iter()
+                .filter_map(TimelineItem::clip)
+                .map(|item| item.id.as_str()),
+        )?;
+        validate_unique_ids(
+            "hold",
+            self.timeline
+                .iter()
+                .filter_map(TimelineItem::hold)
+                .map(|item| item.id.as_str()),
+        )?;
+        for item in &self.timeline {
+            let media = self.media_by_id(item.media_id())?;
             if media.kind != MediaKind::Video {
                 return Err(message(format!(
-                    "clip {} does not refer to video media",
-                    clip.id
+                    "timeline item {} does not refer to video media",
+                    item.id()
                 )));
             }
-            validate_source_range(clip.source_in, clip.source_out, media, &clip.id)?;
-            validate_speed(clip.speed)?;
-            validate_non_negative(clip.volume, &format!("clip {} volume", clip.id))?;
+            match item {
+                TimelineItem::Clip(clip) => {
+                    if !clip.id.starts_with('c') {
+                        return Err(message(format!("video clip {} must use a cN id", clip.id)));
+                    }
+                    validate_source_range(clip.source_in, clip.source_out, media, &clip.id)?;
+                    validate_speed(clip.speed)?;
+                    validate_non_negative(clip.volume, &format!("clip {} volume", clip.id))?;
+                }
+                TimelineItem::Hold(hold) => {
+                    if !hold.id.starts_with('h') {
+                        return Err(message(format!("hold {} must use an hN id", hold.id)));
+                    }
+                    validate_time(hold.freeze_at, &format!("hold {} freeze-at", hold.id))?;
+                    validate_positive(hold.duration, &format!("hold {} duration", hold.id))?;
+                    if let Some(duration) = media.probe.duration
+                        && hold.freeze_at >= duration
+                    {
+                        return Err(message(format!(
+                            "hold {} frame is past media duration {:.3}s",
+                            hold.id, duration
+                        )));
+                    }
+                }
+            }
         }
         validate_unique_ids(
             "text overlay",
@@ -306,6 +383,12 @@ impl Project {
         )?;
         for audio in &self.audio_clips {
             validate_time(audio.start, &format!("audio clip {} start", audio.id))?;
+            if let Some(key) = &audio.key {
+                validate_agent_key(key, "audio key")?;
+            }
+            if let Some(track) = &audio.track {
+                validate_agent_key(track, "audio track")?;
+            }
             let media = self.media_by_id(&audio.media_id)?;
             if media.kind != MediaKind::Audio && !media.probe.has_audio {
                 return Err(message(format!(
@@ -315,15 +398,97 @@ impl Project {
             }
             let source_out = audio.resolved_source_out(media)?;
             validate_source_range(audio.source_in, source_out, media, &audio.id)?;
+            validate_speed(audio.speed)?;
             validate_non_negative(audio.volume, &format!("audio clip {} volume", audio.id))?;
             validate_non_negative(audio.fade_in, &format!("audio clip {} fade-in", audio.id))?;
             validate_non_negative(audio.fade_out, &format!("audio clip {} fade-out", audio.id))?;
-            let duration = source_out - audio.source_in;
+            let natural_duration = (source_out - audio.source_in) / audio.speed;
+            let duration = audio.resolved_duration(media)?;
+            if audio.r#loop && audio.end.is_none() {
+                return Err(message(format!(
+                    "audio clip {} loop requires end",
+                    audio.id
+                )));
+            }
+            if let Some(end) = audio.end {
+                validate_time(end, &format!("audio clip {} end", audio.id))?;
+                if end <= audio.start {
+                    return Err(message(format!(
+                        "audio clip {} end must be greater than start",
+                        audio.id
+                    )));
+                }
+                if !audio.r#loop && end > audio.start + natural_duration + 0.000_001 {
+                    return Err(message(format!(
+                        "audio clip {} end exceeds its natural duration",
+                        audio.id
+                    )));
+                }
+            }
             if audio.fade_in > duration || audio.fade_out > duration {
                 return Err(message(format!(
                     "audio clip {} fade exceeds its duration",
                     audio.id
                 )));
+            }
+        }
+        validate_audio_keys(&self.audio_clips)?;
+        validate_unique_ids(
+            "ducking",
+            self.audio_ducking.iter().map(|item| item.id.as_str()),
+        )?;
+        validate_unique_ids(
+            "ducking key",
+            self.audio_ducking.iter().map(|item| item.key.as_str()),
+        )?;
+        let mut duck_targets = std::collections::HashSet::new();
+        for duck in &self.audio_ducking {
+            validate_agent_key(&duck.key, "ducking key")?;
+            validate_agent_key(&duck.target_track, "ducking target track")?;
+            if duck.trigger_tracks.is_empty() {
+                return Err(message(format!(
+                    "ducking {} requires at least one trigger track",
+                    duck.id
+                )));
+            }
+            if !duck_targets.insert(duck.target_track.as_str()) {
+                return Err(message(format!(
+                    "multiple ducking rules target track {}",
+                    duck.target_track
+                )));
+            }
+            let mut triggers = std::collections::HashSet::new();
+            for track in &duck.trigger_tracks {
+                validate_agent_key(track, "ducking trigger track")?;
+                if track == &duck.target_track {
+                    return Err(message(format!(
+                        "ducking {} target cannot trigger itself",
+                        duck.id
+                    )));
+                }
+                if !triggers.insert(track.as_str()) {
+                    return Err(message(format!(
+                        "ducking {} has duplicate trigger track {}",
+                        duck.id, track
+                    )));
+                }
+            }
+            if !duck.reduction_db.is_finite()
+                || duck.reduction_db <= 0.0
+                || duck.reduction_db > 60.0
+            {
+                return Err(message(format!(
+                    "ducking {} reduction-db must be within (0, 60]",
+                    duck.id
+                )));
+            }
+            for (name, value) in [("attack", duck.attack), ("release", duck.release)] {
+                if !value.is_finite() || !(0.0..=10.0).contains(&value) {
+                    return Err(message(format!(
+                        "ducking {} {name} must be within 0..=10",
+                        duck.id
+                    )));
+                }
             }
         }
         Ok(())
@@ -345,7 +510,10 @@ impl Project {
         next_id("m", self.media.iter().map(|item| item.id.as_str()))
     }
     pub fn next_clip_id(&self) -> String {
-        next_id("c", self.timeline.iter().map(|item| item.id.as_str()))
+        next_id("c", self.timeline.iter().map(TimelineItem::id))
+    }
+    pub fn next_hold_id(&self) -> String {
+        next_id("h", self.timeline.iter().map(TimelineItem::id))
     }
     pub fn next_text_id(&self) -> String {
         next_id("t", self.text_overlays.iter().map(|item| item.id.as_str()))
@@ -355,6 +523,9 @@ impl Project {
     }
     pub fn next_audio_id(&self) -> String {
         next_id("a", self.audio_clips.iter().map(|item| item.id.as_str()))
+    }
+    pub fn next_ducking_id(&self) -> String {
+        next_id("d", self.audio_ducking.iter().map(|item| item.id.as_str()))
     }
 }
 
@@ -366,6 +537,80 @@ impl AudioClip {
                 self.id
             ))
         })
+    }
+
+    pub fn resolved_duration(&self, media: &Media) -> Result<f64> {
+        if let Some(end) = self.end {
+            return Ok(end - self.start);
+        }
+        Ok((self.resolved_source_out(media)? - self.source_in) / self.speed)
+    }
+
+    pub fn resolved_end(&self, media: &Media) -> Result<f64> {
+        Ok(self.start + self.resolved_duration(media)?)
+    }
+}
+
+impl TimelineItem {
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Clip(value) => &value.id,
+            Self::Hold(value) => &value.id,
+        }
+    }
+
+    pub fn media_id(&self) -> &str {
+        match self {
+            Self::Clip(value) => &value.media_id,
+            Self::Hold(value) => &value.media_id,
+        }
+    }
+
+    pub fn duration(&self) -> f64 {
+        match self {
+            Self::Clip(value) => (value.source_out - value.source_in) / value.speed,
+            Self::Hold(value) => value.duration,
+        }
+    }
+
+    pub fn clip(&self) -> Option<&Clip> {
+        match self {
+            Self::Clip(value) => Some(value),
+            Self::Hold(_) => None,
+        }
+    }
+
+    pub fn clip_mut(&mut self) -> Option<&mut Clip> {
+        match self {
+            Self::Clip(value) => Some(value),
+            Self::Hold(_) => None,
+        }
+    }
+
+    pub fn hold(&self) -> Option<&HoldClip> {
+        match self {
+            Self::Hold(value) => Some(value),
+            Self::Clip(_) => None,
+        }
+    }
+
+    pub fn hold_mut(&mut self) -> Option<&mut HoldClip> {
+        match self {
+            Self::Hold(value) => Some(value),
+            Self::Clip(_) => None,
+        }
+    }
+}
+
+impl From<Clip> for TimelineItem {
+    fn from(value: Clip) -> Self {
+        Self::Clip(value)
+    }
+}
+
+impl From<HoldClip> for TimelineItem {
+    fn from(value: HoldClip) -> Self {
+        Self::Hold(value)
     }
 }
 
@@ -506,6 +751,40 @@ fn validate_non_negative(value: f64, name: &str) -> Result<()> {
         return Err(message(format!(
             "{name} must be a finite non-negative number"
         )));
+    }
+    Ok(())
+}
+
+fn validate_positive(value: f64, name: &str) -> Result<()> {
+    if !value.is_finite() || value <= 0.0 {
+        return Err(message(format!("{name} must be a finite positive number")));
+    }
+    Ok(())
+}
+
+pub fn validate_agent_key(value: &str, name: &str) -> Result<()> {
+    if value.is_empty()
+        || value.len() > 64
+        || !value.chars().enumerate().all(|(index, character)| {
+            character.is_ascii_alphanumeric() || (index > 0 && matches!(character, '.' | '_' | '-'))
+        })
+    {
+        return Err(message(format!("invalid {name} {value:?}")));
+    }
+    Ok(())
+}
+
+fn validate_audio_keys(items: &[AudioClip]) -> Result<()> {
+    let mut seen = std::collections::HashSet::new();
+    for item in items {
+        let Some(key) = &item.key else { continue };
+        let pair = (item.track.as_deref().unwrap_or(""), key.as_str());
+        if !seen.insert(pair) {
+            return Err(message(format!(
+                "duplicate audio key {:?} in track {:?}",
+                key, item.track
+            )));
+        }
     }
     Ok(())
 }

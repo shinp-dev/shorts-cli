@@ -3,12 +3,12 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::{Result, VedError, message};
 use crate::project::{MediaKind, MediaProbe};
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct ToolStatus {
     pub name: &'static str,
     pub available: bool,

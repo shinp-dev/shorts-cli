@@ -15,7 +15,10 @@ pub fn load(path: &Path) -> Result<Project> {
             path: path.to_path_buf(),
             source,
         })?;
-    if json.get("version").and_then(serde_json::Value::as_u64) == Some(1) {
+    if matches!(
+        json.get("version").and_then(serde_json::Value::as_u64),
+        Some(1 | 2)
+    ) {
         json["version"] = serde_json::Value::from(crate::project::PROJECT_VERSION);
     }
     let project: Project = serde_json::from_value(json).map_err(|source| VedError::Json {
@@ -91,6 +94,10 @@ fn replace_file(temp: &Path, destination: &Path) -> Result<()> {
     })
 }
 
+pub(crate) fn replace_existing(temp: &Path, destination: &Path) -> Result<()> {
+    replace_file(temp, destination)
+}
+
 #[cfg(windows)]
 fn replace_file(temp: &Path, destination: &Path) -> Result<()> {
     use std::os::windows::ffi::OsStrExt;
@@ -148,18 +155,23 @@ mod tests {
     }
 
     #[test]
-    fn version_one_project_migrates_in_memory() {
+    fn old_project_versions_migrate_in_memory() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("project.json");
-        std::fs::write(
-            &path,
-            r#"{"version":1,"canvas":{"width":1080,"height":1920,"fps":30},"media":[],"timeline":[]}"#,
-        )
-        .unwrap();
-        let migrated = load(&path).unwrap();
-        assert_eq!(migrated.version, crate::project::PROJECT_VERSION);
-        assert!(migrated.text_overlays.is_empty());
-        assert!(migrated.image_overlays.is_empty());
-        assert!(migrated.audio_clips.is_empty());
+        for version in [1, 2] {
+            let path = directory.path().join(format!("project-v{version}.json"));
+            std::fs::write(
+                &path,
+                format!(
+                    r#"{{"version":{version},"canvas":{{"width":1080,"height":1920,"fps":30}},"media":[],"timeline":[]}}"#
+                ),
+            )
+            .unwrap();
+            let migrated = load(&path).unwrap();
+            assert_eq!(migrated.version, crate::project::PROJECT_VERSION);
+            assert!(migrated.text_overlays.is_empty());
+            assert!(migrated.image_overlays.is_empty());
+            assert!(migrated.audio_clips.is_empty());
+            assert!(migrated.audio_ducking.is_empty());
+        }
     }
 }
